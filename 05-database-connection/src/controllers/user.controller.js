@@ -4,6 +4,16 @@ import { User } from '../models/user.model.js'
 import { uploadFiletoCloudinary } from '../utils/cloudnary.js'
 import { APIResponse } from '../utils/APIResponse.js'
 
+const generateAccessAndRefreshToken = async (userId) => {
+    const user = await User.findById(userId)
+    const accessToken = user.generateAccessToken()
+    const refreshToken = user.generateRefreshToken()
+
+    user.refreshToken = refreshToken
+    await user.save({ validateBeforeSave: false })
+    return { accessToken, refreshToken }
+}
+
 const registerUser = asyncHandler(async (req, res) => {
     // Get details from user
     //validate,
@@ -68,4 +78,60 @@ const registerUser = asyncHandler(async (req, res) => {
         .json(new APIResponse(200, createdUser, 'User Registerd Successfully'))
 })
 
-export { registerUser }
+const loginUser = asyncHandler(async (req, res) => {
+    //To-do
+    // Get details from user
+    // check if they are not null or undefined
+    // check is user exists or not in out db
+    // if users exists check is password match with our encrypted password
+    // access and refresh token
+    // send secured-cookie
+
+    const { username, email, password } = req.body
+    if (!(username || email || password)) {
+        throw new APIError(400, 'Username or password is required')
+    }
+    const existedUser = await User.findOne({
+        $or: [{ username }, { email }],
+    })
+    if (!existedUser) {
+        throw new APIError(404, 'User does not exist')
+    }
+    // Now users exist in our db compare password
+    const isPasswordCorrect = await existedUser.isPasswordCorrect(password)
+
+    if (!isPasswordCorrect) {
+        throw new APIError(401, 'Invalid user credentials')
+    }
+    // Now  we have to generateAccesstoken and refresh token
+    //and send them as cookies and append to the existed user
+    const { refreshToken, accessToken } = await generateAccessAndRefreshToken(
+        user._id
+    )
+
+    const loggedInUser = await User.findOne(user._id).select(
+        '-refreshToken -password'
+    )
+
+    const options = {
+        httpOnly: true,
+        secure: true,
+    }
+
+    res.status(200)
+        .cookie('accessToken', accessToken, options)
+        .cookie('refreshToken', refreshToken, options)
+        .json(
+            new APIResponse(
+                200,
+                {
+                    user: loggedInUser,
+                    accessToken,
+                    refreshToken,
+                },
+                'user logged in successfully'
+            )
+        )
+})
+
+export { registerUser, loginUser }
