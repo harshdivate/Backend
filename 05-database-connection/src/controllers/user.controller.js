@@ -1,6 +1,7 @@
 import asyncHandler from '../utils/asyncHandler.js'
 import { APIError } from '../utils/APIError.js'
 import { User } from '../models/user.model.js'
+import jwt from 'jsonwebtoken'
 import { uploadFiletoCloudinary } from '../utils/cloudnary.js'
 import { APIResponse } from '../utils/APIResponse.js'
 
@@ -88,29 +89,40 @@ const loginUser = asyncHandler(async (req, res) => {
     // send secured-cookie
 
     const { username, email, password } = req.body
-    if (!(username || email || password)) {
-        throw new APIError(400, 'Username or password is required')
+    // console.log('emaail', email)
+    // console.log('passwrod', password)
+
+    if (!username && !email) {
+        throw new APIError(400, 'username or email required')
     }
+
+    // if (!(username || email || password)) {
+    //     throw new APIError(400, 'Username or password is required')
+    // }
     const existedUser = await User.findOne({
         $or: [{ username }, { email }],
     })
+
     if (!existedUser) {
         throw new APIError(404, 'User does not exist')
     }
+
     // Now users exist in our db compare password
     const isPasswordCorrect = await existedUser.isPasswordCorrect(password)
-
+    console.log(isPasswordCorrect)
     if (!isPasswordCorrect) {
         throw new APIError(401, 'Invalid user credentials')
     }
+    console.log('cmae')
+
     // Now  we have to generateAccesstoken and refresh token
     //and send them as cookies and append to the existed user
     const { refreshToken, accessToken } = await generateAccessAndRefreshToken(
-        user._id
+        existedUser._id
     )
     //sample
 
-    const loggedInUser = await User.findOne(user._id).select(
+    const loggedInUser = await User.findOne(existedUser._id).select(
         '-refreshToken -password'
     )
 
@@ -119,7 +131,8 @@ const loginUser = asyncHandler(async (req, res) => {
         secure: true,
     }
 
-    res.status(200)
+    return res
+        .status(200)
         .cookie('accessToken', accessToken, options)
         .cookie('refreshToken', refreshToken, options)
         .json(
@@ -135,4 +148,74 @@ const loginUser = asyncHandler(async (req, res) => {
         )
 })
 
-export { registerUser, loginUser }
+const logoutUser = asyncHandler(async (req, res) => {
+    const id = req.user._id
+
+    await User.findByIdAndUpdate(
+        id,
+        {
+            $set: { refreshToken: undefined },
+        },
+        {
+            new: true,
+        }
+    )
+
+    const options = {
+        httpOnly: true,
+        secure: true,
+    }
+
+    return res
+        .status(200)
+        .clearCookie('accessToken', options)
+        .clearCookie('refreshToken', options)
+        .json(new APIResponse(200, {}, 'User logged out '))
+})
+
+const refreshAccessToken = asyncHandler(async (req, res) => {
+    const incomingRefreshToken =
+        req.cookies?.refreshToken || req.body.refreshToken
+
+    if (!refreshAccessToken) {
+        throw new APIError(401, 'Unauthorized request')
+    }
+    console.log(refreshAccessToken)
+    const decodedToken = await jwt.verify(
+        refreshAccessToken,
+        process.env.REFRESH_TOKEN_SECRET
+    )
+
+    if (!decodedToken) {
+        throw new APIError(401, 'Refresh token has been tampered')
+    }
+    const user = await User.findById(decodedToken._id)
+    if (!user) {
+        throw new APIError(401, 'Invalid refresh token')
+    }
+    if (incomingRefreshToken !== user?.refreshToken) {
+        throw new APIError(401, 'Invalid refresh token')
+    }
+    const { refreshToken, accessToken } = generateAccessAndRefreshToken(
+        user?._id
+    )
+
+    const options = {
+        httpOnly: true,
+        secure: true,
+    }
+
+    return res
+        .status(200)
+        .cookie('accessToken', accessToken)
+        .cookie('refreshToken', refreshToken)
+        .json(
+            new APIResponse(
+                200,
+                { accessToken, refreshToken },
+                'New Refresh Token generated'
+            )
+        )
+})
+
+export { registerUser, loginUser, logoutUser, refreshAccessToken }
